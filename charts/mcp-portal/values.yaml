@@ -1,0 +1,164 @@
+﻿# Defaults are safe and minimal. Environment-specific choices live in values-local.yaml / values-prod.yaml.
+
+# Two namespaces keep the store and the platform separable, so NetworkPolicies can say
+# "only the gateway may reach the store's MCP server" in terms of namespaces and labels.
+namespaces:
+  store: store
+  platform: platform
+  create: true
+
+image:
+  registry: ""            # e.g. ghcr.io/you ; empty means local image names (kind load / k3s import)
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets: []         # e.g. [{name: regcred}]
+
+ingress:
+  className: traefik      # k3s and k3d ship Traefik; see values-nginx.yaml for ingress-nginx
+  controllerNamespace: kube-system     # NetworkPolicy: namespace Ingress traffic comes from
+  host: mcp-portal.localtest.me         # dashboard, /api and /mcp
+  shopHost: shop.localtest.me          # the WooCommerce storefront
+  scheme: http            # http | https, used for generated absolute URLs
+  tls:
+    enabled: false
+    secretName: mcp-portal-tls
+    shopSecretName: shop-tls
+  annotations: {}
+  # Extra annotations for the /api and /mcp routes only (the chat stream and long tool calls need generous timeouts on some controllers).
+  gatewayAnnotations: {}
+
+networkPolicy:
+  enabled: true
+  # Egress for the LLM provider and WordPress plugin downloads. Private ranges are excluded.
+  internetEgress: true
+  dnsNamespace: kube-system
+
+# ----------------------------- store -------------------------------------------
+store:
+  name: "Vintage Store" 
+  timezone: Asia/Kolkata
+  currency: INR
+  country: "IN:TN"
+  mysql:
+    image: mysql:8.4
+    storage: 2Gi
+    storageClassName: ""
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 768Mi}
+  wordpress:
+    image: wordpress:6.8-php8.3-apache
+    cliImage: wordpress:cli-2.11-php8.3
+    woocommerceVersion: "9.9.5"       # pinned: the setup job installs exactly this
+    storage: 5Gi
+    storageClassName: ""
+    replicas: 1                        # RWO volume: scale only with an RWX class
+    adminUser: shopadmin
+    adminEmail: admin@example.com
+    adminPassword: "Adminportal@123"                  # empty = generated once and kept across upgrades
+    resources:
+      requests: {cpu: 200m, memory: 384Mi}
+      limits: {cpu: "1", memory: 1Gi}
+  setupJob:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+    demoProducts: true
+    runOnUpgrade: false   # false: the setup Job is a post-install hook only, so upgrades never wait on it
+  wooMcp:
+    image: woo-mcp
+    replicas: 1
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 300m, memory: 192Mi}
+
+# ----------------------------- platform ----------------------------------------
+platform:
+  postgres:
+    image: postgres:16-alpine
+    storage: 2Gi
+    storageClassName: ""
+    resources:
+      requests: {cpu: 100m, memory: 192Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  gateway:
+    image: gateway
+    replicas: 1
+    resources:
+      requests: {cpu: 100m, memory: 160Mi}
+      limits: {cpu: "1", memory: 384Mi}
+    cookieSecure: false
+    bootstrapAdmin:
+      email: admin@example.com
+      password: ""                    # empty = generated once; read it with the command printed by `helm install`
+    llm:
+      baseUrl: https://api.groq.com/openai/v1
+      model: llama-3.3-70b-versatile
+      reasoningEffort: ""             # e.g. "none" for OpenAI reasoning models, which only allow tool calls with it off
+      apiKey: ""                      # set with --set platform.gateway.llm.apiKey=... ; chat is disabled without it
+    rateLimitPerMinute: 120
+    lazyToolsThreshold: 40
+    # In-cluster upstreams are private addresses. Only these exact hosts may be private, so an admin
+    # who adds a server in the dashboard still cannot point the gateway at the database or the API server.
+    extraPrivateAllowlist: []
+  dashboard:
+    image: dashboard
+    replicas: 1
+    resources:
+      requests: {cpu: 20m, memory: 32Mi}
+      limits: {cpu: 200m, memory: 96Mi}
+  # Lets the chat agent (and admins) diagnose and recover this platform. The ServiceAccount is bound by
+  # templates/rbac.yaml to: read pods/logs/events/deployments in the two namespaces, and patch ONLY the
+  # deployments listed in writeTargets. It has no access to Secrets, ConfigMaps or any other resource.
+  kubeOps:
+    image: kube-ops-mcp
+    minReplicas: 1                   # scale_deployment may go down to this (0 = "scale to zero" is allowed for demos)
+    logTailMaxLines: 200
+    writeCooldownSeconds: 30         # minimum gap between two changes to the same deployment
+    # Deployments restart_deployment / scale_deployment may touch. scope: platform | store. The gateway, postgres
+    # and kube-ops-mcp itself are deliberately absent: an agent must not be able to take away its own eyes or hands.
+    writeTargets:
+      - {scope: platform, name: currency-mcp, maxReplicas: 3}
+      - {scope: store, name: woo-mcp, maxReplicas: 3}
+    # The API server is the node/control-plane address, not a pod. Defaults allow private ranges on 6443/443;
+    # tighten to your node IPs for production.
+    apiServerCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+    apiServerPorts: [6443, 443]
+    resources:
+      requests: {cpu: 20m, memory: 64Mi}
+      limits: {cpu: 200m, memory: 160Mi}
+  currency:
+    image: currency-mcp
+    resources:
+      requests: {cpu: 20m, memory: 48Mi}
+      limits: {cpu: 200m, memory: 128Mi}
+  # Deliberately malicious fixture for demonstrating quarantine and rug-pull detection.
+  # It is NOT seeded into the gateway: an admin adds it from the dashboard to see what happens.
+  evil:
+    enabled: false
+    image: evil-mcp
+    rugPullAfterSeconds: 0
+    resources:
+      requests: {cpu: 20m, memory: 48Mi}
+      limits: {cpu: 100m, memory: 128Mi}
+  # Multi-store provisioning (bonus). Each store the dashboard creates is its own Helm release (charts/mcp-store) in its
+  # own namespace "<namespacePrefix><id>", with its own database, Secrets, volumes, Ingress host and woo-mcp, which the
+  # gateway registers automatically. The provisioner is the only component that can create those namespaces, and an
+  # admission policy (templates/stores-admission.yaml) confines it to them.
+  stores:
+    enabled: true
+    image: provisioner
+    namespacePrefix: store-          # must end with "-"; never use the name of an existing namespace
+    baseDomain: stores.localtest.me  # stores are served at <id>.<baseDomain>
+    maxPerUser: 3
+    maxTotal: 8
+    provisionTimeoutSeconds: 1200
+    syncIntervalSeconds: 15          # how often the gateway reconciles its registrations with the provisioner
+    admissionPolicy:
+      enabled: true                  # needs Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). Do not disable in production.
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 384Mi}
+    # Merged over the defaults the platform derives for the mcp-store chart (images, ingress class, quotas, ...).
+    values: {}
+

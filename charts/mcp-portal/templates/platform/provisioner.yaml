@@ -1,0 +1,23 @@
+{{- if .Values.platform.stores.enabled }}
+{{- $ns := .Values.namespaces.platform -}}
+{{- $st := .Values.platform.stores -}}
+{{- if eq (trimSuffix "-" $st.namespacePrefix) $st.namespacePrefix }}{{ fail "platform.stores.namespacePrefix must end with a hyphen, e.g. store-" }}{{ end -}}
+{{- /*
+Defaults for every store's Helm release (charts/mcp-store), derived from this release so a store always matches the
+platform it runs on. platform.stores.values wins over these. The provisioner adds the per-store identity (id, name,
+owner) and the host name itself.
+*/ -}}
+{{- $base := dict
+  "image" (dict "registry" .Values.image.registry "tag" .Values.image.tag "pullPolicy" .Values.image.pullPolicy "pullSecrets" .Values.image.pullSecrets)
+  "ingress" (dict "className" .Values.ingress.className "controllerNamespace" .Values.ingress.controllerNamespace "annotations" .Values.ingress.annotations "tls" (dict "enabled" .Values.ingress.tls.enabled))
+  "gateway" (dict "namespace" $ns)
+  "networkPolicy" (dict "enabled" .Values.networkPolicy.enabled "internetEgress" .Values.networkPolicy.internetEgress "dnsNamespace" .Values.networkPolicy.dnsNamespace)
+  "store" (dict "timezone" .Values.store.timezone "currency" .Values.store.currency "country" .Values.store.country)
+  "wordpress" (dict "image" .Values.store.wordpress.image "cliImage" .Values.store.wordpress.cliImage "woocommerceVersion" .Values.store.wordpress.woocommerceVersion)
+  "wooMcp" (dict "image" .Values.store.wooMcp.image)
+-}}
+{{- $values := merge (dict) $st.values $base -}}
+{{- $env := printf "- name: PROVISIONER_TOKEN\n  valueFrom: {secretKeyRef: {name: upstream-tokens, key: PROVISIONER_TOKEN}}\n- {name: STORE_NS_PREFIX, value: %s}\n- {name: STORE_BASE_DOMAIN, value: %s}\n- {name: STORE_SCHEME, value: %s}\n- {name: MAX_STORES_PER_USER, value: %s}\n- {name: MAX_STORES_TOTAL, value: %s}\n- {name: PROVISION_TIMEOUT_SECONDS, value: %s}\n- {name: STORE_VALUES_JSON, value: %s}\n- {name: POD_NAMESPACE, value: %s}\n- {name: POD_SERVICE_ACCOUNT, value: provisioner}" ($st.namespacePrefix | quote) ($st.baseDomain | quote) (.Values.ingress.scheme | quote) (printf "%v" $st.maxPerUser | quote) (printf "%v" $st.maxTotal | quote) (printf "%v" $st.provisionTimeoutSeconds | quote) ($values | toJson | quote) ($ns | quote) -}}
+{{- /* The provisioner's token is mounted on purpose (it talks to the Kubernetes API); rbac in stores-rbac.yaml and the admission policy in stores-admission.yaml bound what it can do. */ -}}
+{{ include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "provisioner" "component" "provisioner" "automountToken" true "image" (include "mcp-portal.image" (dict "root" . "name" $st.image)) "port" 8080 "replicas" 1 "resources" $st.resources "envYaml" $env "healthPath" "/healthz" "checksum" (sha256sum $env)) }}
+{{- end }}

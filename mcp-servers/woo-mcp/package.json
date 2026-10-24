@@ -1,0 +1,36 @@
+{
+    "name": "@mcp-portal/woo-mcp",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "WooCommerce MCP server (Streamable HTTP) built on the WooCommerce REST API",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "start": "node dist/index.js",
+        "dev": "tsx watch src/index.ts",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@mcp-portal/mcp-kit": "workspace:*",
+        "@modelcontextprotocol/sdk": "^1.32.1",
+        "pino": "^10.4.0",
+        "zod": "^4.6.5"
+    },
+    "exports": {
+        ".": "./dist/index.js",
+        "./tools": {
+            "types": "./dist/tools.d.ts",
+            "default": "./dist/tools.js"
+        },
+        "./client": {
+            "types": "./dist/woo-client.d.ts",
+            "default": "./dist/woo-client.js"
+        },
+        "./testing": {
+            "types": "./dist/testing.d.ts",
+            "default": "./dist/testing.js"
+        }
+    }
+}

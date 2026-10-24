@@ -1,0 +1,92 @@
+{{- $w := .Values.wooMcp -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: woo-mcp
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woo-mcp
+  labels:
+    {{- include "mcp-store.labels" (dict "root" . "component" "mcp-server" "name" "woo-mcp") | nindent 4 }}
+spec:
+  selector:
+    {{- include "mcp-store.selector" (dict "name" "woo-mcp") | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# This store's own WooCommerce MCP server. It only knows this store's WordPress and its own bearer token.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woo-mcp
+  labels:
+    {{- include "mcp-store.labels" (dict "root" . "component" "mcp-server" "name" "woo-mcp") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "mcp-store.selector" (dict "name" "woo-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-store.labels" (dict "root" . "component" "mcp-server" "name" "woo-mcp") | nindent 8 }}
+    spec:
+      serviceAccountName: woo-mcp
+      automountServiceAccountToken: false
+      {{- include "mcp-store.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: woo-mcp
+          image: {{ include "mcp-store.image" (dict "root" . "name" $w.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: PORT, value: "8080"}
+            - {name: NODE_ENV, value: production}
+            - {name: WOO_BASE_URL, value: {{ printf "http://wordpress.%s.svc.cluster.local" .Release.Namespace | quote }}}
+            - {name: STORE_TIMEZONE, value: {{ .Values.store.timezone | quote }}}
+            - {name: STORE_NAME, value: {{ .Values.store.name | quote }}}
+            - name: WOO_CONSUMER_KEY
+              valueFrom: {secretKeyRef: {name: woo-api, key: consumer-key}}
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: {secretKeyRef: {name: woo-api, key: consumer-secret}}
+            - name: MCP_AUTH_TOKEN
+              valueFrom: {secretKeyRef: {name: woo-mcp-auth, key: token}}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          securityContext:
+            {{- include "mcp-store.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

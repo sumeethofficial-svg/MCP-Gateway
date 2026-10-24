@@ -1,0 +1,8 @@
+apiVersion: v2
+name: mcp-store
+description: One isolated WooCommerce store (MySQL, WordPress, its own woo-mcp server) installed by the provisioner into its own namespace.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [woocommerce, mcp, multi-store]

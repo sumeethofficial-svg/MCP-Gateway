@@ -1,0 +1,8 @@
+# Overlay for clusters that use ingress-nginx (kind, minikube). Layer it after values-local.yaml:
+#   helm upgrade --install mcp-portal charts/mcp-portal -f charts/mcp-portal/values-local.yaml -f charts/mcp-portal/values-nginx.yaml
+ingress:
+  className: nginx
+  controllerNamespace: ingress-nginx
+  gatewayAnnotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"

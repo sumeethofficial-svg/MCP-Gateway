@@ -1,0 +1,51 @@
+{{- $ns := .Values.namespaces.platform -}}
+{{- $g := .Values.platform.gateway -}}
+{{- $host := .Values.ingress.host -}}
+{{- $publicUrl := printf "%s://%s" .Values.ingress.scheme $host -}}
+{{- $woo := printf "woo-mcp.%s.svc.cluster.local" .Values.namespaces.store -}}
+{{- $ko := printf "kube-ops-mcp.%s.svc.cluster.local" $ns -}}
+{{- $cu := printf "currency-mcp.%s.svc.cluster.local" $ns -}}
+{{- $allow := list $woo $ko $cu -}}
+{{- if .Values.platform.evil.enabled -}}{{- $allow = append $allow (printf "evil-mcp.%s.svc.cluster.local" $ns) -}}{{- end -}}
+{{- if .Values.platform.stores.enabled -}}{{- $allow = append $allow (printf "woo-mcp.%s*.svc.cluster.local" .Values.platform.stores.namespacePrefix) -}}{{- end -}}
+{{- $allow = concat $allow $g.extraPrivateAllowlist -}}
+{{- /* Upstreams the gateway registers for itself on every start. Admins add more in the dashboard. */ -}}
+{{- $seeded := list
+  (dict "slug" "woo" "name" "WooCommerce store" "url" (printf "http://%s:8080/mcp" $woo) "credentialEnv" "WOO_MCP_TOKEN" "trustAnnotations" true)
+  (dict "slug" "kube-ops" "name" "Cluster operations" "url" (printf "http://%s:8080/mcp" $ko) "credentialEnv" "KUBE_OPS_MCP_TOKEN" "trustAnnotations" true)
+  (dict "slug" "currency" "name" "Currency rates" "url" (printf "http://%s:8080/mcp" $cu) "credentialEnv" "CURRENCY_MCP_TOKEN" "trustAnnotations" true) -}}
+{{- define "mcp-portal.gatewayEnv" -}}
+- {name: LOG_LEVEL, value: info}
+- {name: PUBLIC_URL, value: {{ .publicUrl | quote }}}
+- {name: COOKIE_SECURE, value: {{ .g.cookieSecure | quote }}}
+- name: POSTGRES_PASSWORD
+  valueFrom: {secretKeyRef: {name: postgres-credentials, key: password}}
+- {name: DATABASE_URL, value: "postgres://gateway:$(POSTGRES_PASSWORD)@postgres.{{ .ns }}.svc.cluster.local:5432/gateway"}
+- name: ENCRYPTION_KEY
+  valueFrom: {secretKeyRef: {name: gateway-secrets, key: ENCRYPTION_KEY}}
+- {name: BOOTSTRAP_ADMIN_EMAIL, value: {{ .g.bootstrapAdmin.email | quote }}}
+- name: BOOTSTRAP_ADMIN_PASSWORD
+  valueFrom: {secretKeyRef: {name: gateway-secrets, key: BOOTSTRAP_ADMIN_PASSWORD}}
+- {name: LLM_BASE_URL, value: {{ .g.llm.baseUrl | quote }}}
+- {name: LLM_MODEL, value: {{ .g.llm.model | quote }}}
+{{- with .g.llm.reasoningEffort }}
+- {name: LLM_REASONING_EFFORT, value: {{ . | quote }}}
+{{- end }}
+- name: LLM_API_KEY
+  valueFrom: {secretKeyRef: {name: gateway-secrets, key: LLM_API_KEY}}
+- {name: RATE_LIMIT_PER_MINUTE, value: {{ .g.rateLimitPerMinute | quote }}}
+- {name: LAZY_TOOLS_THRESHOLD, value: {{ .g.lazyToolsThreshold | quote }}}
+- {name: UPSTREAM_PRIVATE_ALLOWLIST, value: {{ .allow | join "," | quote }}}
+- {name: SEEDED_UPSTREAMS, value: {{ .seeded | toJson | quote }}}
+{{- if .stores.enabled }}
+- {name: PROVISIONER_URL, value: "http://provisioner.{{ .ns }}.svc.cluster.local:8080"}
+- {name: STORE_SYNC_INTERVAL_SECONDS, value: {{ .stores.syncIntervalSeconds | quote }}}
+{{- end }}
+{{- range $name := concat (list "WOO_MCP_TOKEN" "KUBE_OPS_MCP_TOKEN" "CURRENCY_MCP_TOKEN" "EVIL_MCP_TOKEN") (ternary (list "PROVISIONER_TOKEN") (list) .stores.enabled) }}
+- name: {{ $name }}
+  valueFrom: {secretKeyRef: {name: upstream-tokens, key: {{ $name }}}}
+{{- end }}
+{{- end -}}
+{{- $env := include "mcp-portal.gatewayEnv" (dict "publicUrl" $publicUrl "g" $g "ns" $ns "allow" $allow "seeded" $seeded "stores" .Values.platform.stores) -}}
+{{- include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "gateway" "component" "gateway" "image" (include "mcp-portal.image" (dict "root" . "name" "gateway")) "port" 8080 "startupFailures" 100 "replicas" $g.replicas "resources" $g.resources "envYaml" $env "checksum" (sha256sum (printf "%s%s" $env $g.llm.apiKey))) }}
+{{ include "mcp-portal.pdb" (dict "ns" $ns "name" "gateway" "replicas" $g.replicas) }}

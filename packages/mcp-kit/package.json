@@ -1,0 +1,22 @@
+{
+  "name": "@mcp-portal/mcp-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared harness for stateless Streamable HTTP MCP servers (auth, health, limits, graceful shutdown)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  }
+}

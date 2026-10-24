@@ -1,0 +1,283 @@
+﻿{{- if .Values.networkPolicy.enabled }}
+{{- $s := .Values.namespaces.store -}}
+{{- $p := .Values.namespaces.platform -}}
+{{- $ing := .Values.ingress.controllerNamespace -}}
+{{- $dns := .Values.networkPolicy.dnsNamespace -}}
+{{- /*
+Zero trust inside the cluster: both namespaces start from "deny everything", then each flow is allowed explicitly.
+The one that matters most: woo-mcp accepts connections only from the gateway pods. A compromised pod elsewhere in the
+cluster (or another namespace) cannot talk to the store's MCP server, even if it somehow learned the token.
+Enforcement needs a CNI that implements NetworkPolicy (k3s: yes; kind: recent kindnet; Calico/Cilium: yes).
+*/ -}}
+{{- range $ns := list $s $p }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $dns }}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- end }}
+
+# ============================== store namespace ==============================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress
+  namespace: {{ $s }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: wordpress}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:   # storefront traffic from the Ingress controller
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $ing }}}
+      ports: [{protocol: TCP, port: 80}]
+    - from:   # REST calls from woo-mcp
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: woo-mcp}
+      ports: [{protocol: TCP, port: 80}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: mysql}
+      ports: [{protocol: TCP, port: 3306}]
+    {{- if .Values.networkPolicy.internetEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mysql
+  namespace: {{ $s }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: mysql}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: wordpress}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: wordpress-setup}
+      ports: [{protocol: TCP, port: 3306}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-setup
+  namespace: {{ $s }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: wordpress-setup}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: mysql}
+      ports: [{protocol: TCP, port: 3306}]
+    {{- if .Values.networkPolicy.internetEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- end }}
+---
+# The store's MCP server is internal-only: reachable from the gateway pods and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: woo-mcp
+  namespace: {{ $s }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: woo-mcp}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $p }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: wordpress}
+      ports: [{protocol: TCP, port: 80}]
+
+# ============================= platform namespace ============================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway
+  namespace: {{ $p }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: gateway}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $ing }}}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: postgres}
+      ports: [{protocol: TCP, port: 5432}]
+    - to:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/name, operator: In, values: [kube-ops-mcp, currency-mcp, evil-mcp]}
+      ports: [{protocol: TCP, port: 8080}]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $s }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: woo-mcp}
+      ports: [{protocol: TCP, port: 8080}]
+    {{- if .Values.platform.stores.enabled }}
+    - to:   # each store's own woo-mcp (store namespaces are labelled by the provisioner)
+        - namespaceSelector:
+            matchLabels: {mcp-portal.io/store: "true"}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: woo-mcp}
+      ports: [{protocol: TCP, port: 8080}]
+    - to:   # the provisioner API
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: provisioner}
+      ports: [{protocol: TCP, port: 8080}]
+    {{- end }}
+    {{- if .Values.networkPolicy.internetEgress }}
+    - to:   # the LLM provider
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dashboard
+  namespace: {{ $p }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: dashboard}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $ing }}}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: {{ $p }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      ports: [{protocol: TCP, port: 5432}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-servers
+  namespace: {{ $p }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/name, operator: In, values: [kube-ops-mcp, currency-mcp, evil-mcp]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      ports: [{protocol: TCP, port: 8080}]
+---
+# kube-ops-mcp may talk to the Kubernetes API server and nothing else. On k3s/k3d the API server is the
+# node's own address on 6443, which is NOT a pod, so it has to be allowed by CIDR: narrow platform.kubeOps.apiServerCidrs
+# to your node/control-plane address(es) once you know them (`kubectl get endpoints kubernetes`).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-ops-mcp-egress
+  namespace: {{ $p }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: kube-ops-mcp}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range .Values.platform.kubeOps.apiServerCidrs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range .Values.platform.kubeOps.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+{{- if .Values.platform.stores.enabled }}
+---
+# The provisioner accepts calls from the gateway only, and may talk to the Kubernetes API server and nothing else
+# (it installs charts from its own image, so it needs no internet access).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provisioner
+  namespace: {{ $p }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: provisioner}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        {{- range .Values.platform.kubeOps.apiServerCidrs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range .Values.platform.kubeOps.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+{{- end }}
+{{- end }}
+

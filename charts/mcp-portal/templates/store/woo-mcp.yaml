@@ -1,0 +1,15 @@
+{{- $ns := .Values.namespaces.store -}}
+{{- $w := .Values.store.wooMcp -}}
+{{- define "mcp-portal.wooMcpEnv" -}}
+- {name: WOO_BASE_URL, value: {{ printf "http://wordpress.%s.svc.cluster.local" .Values.namespaces.store | quote }}}
+- {name: STORE_TIMEZONE, value: {{ .Values.store.timezone | quote }}}
+- {name: STORE_NAME, value: {{ .Values.store.name | quote }}}
+- name: WOO_CONSUMER_KEY
+  valueFrom: {secretKeyRef: {name: woo-api, key: consumer-key}}
+- name: WOO_CONSUMER_SECRET
+  valueFrom: {secretKeyRef: {name: woo-api, key: consumer-secret}}
+- name: MCP_AUTH_TOKEN
+  valueFrom: {secretKeyRef: {name: woo-mcp-auth, key: token}}
+{{- end -}}
+{{- include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "woo-mcp" "component" "mcp-server" "image" (include "mcp-portal.image" (dict "root" . "name" "woo-mcp")) "port" 8080 "replicas" $w.replicas "resources" $w.resources "envYaml" (include "mcp-portal.wooMcpEnv" .)) }}
+{{ include "mcp-portal.pdb" (dict "ns" $ns "name" "woo-mcp" "replicas" $w.replicas) }}

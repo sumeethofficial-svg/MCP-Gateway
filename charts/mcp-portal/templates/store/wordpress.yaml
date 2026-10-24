@@ -1,0 +1,147 @@
+{{- $ns := .Values.namespaces.store -}}
+{{- $w := .Values.store.wordpress -}}
+{{- $siteUrl := printf "%s://%s" .Values.ingress.scheme .Values.ingress.shopHost -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wordpress
+  namespace: {{ $ns }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wordpress-data
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "storefront" "name" "wordpress") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $w.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $w.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "storefront" "name" "wordpress") | nindent 4 }}
+spec:
+  selector:
+    {{- include "mcp-portal.selector" (dict "name" "wordpress") | nindent 4 }}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "storefront" "name" "wordpress") | nindent 4 }}
+spec:
+  replicas: {{ $w.replicas }}
+  strategy:
+    type: Recreate   # the volume is ReadWriteOnce; two pods cannot overlap during a rollout
+  selector:
+    matchLabels:
+      {{- include "mcp-portal.selector" (dict "name" "wordpress") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-portal.labels" (dict "root" . "component" "storefront" "name" "wordpress") | nindent 8 }}
+    spec:
+      serviceAccountName: wordpress
+      automountServiceAccountToken: false
+      {{- include "mcp-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        fsGroup: 33
+        seccompProfile: {type: RuntimeDefault}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: wordpress
+          image: {{ $w.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 80}
+          env:
+            - {name: WORDPRESS_DB_HOST, value: mysql}
+            - {name: WORDPRESS_DB_NAME, value: wordpress}
+            - {name: WORDPRESS_DB_USER, value: wordpress}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: mysql-credentials, key: password}}
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                // TLS is terminated at the Ingress (and woo-mcp sends this header for in-cluster calls),
+                // so honour X-Forwarded-Proto. WooCommerce only accepts Basic-auth API keys over HTTPS.
+                if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+                    $_SERVER['HTTPS'] = 'on';
+                }
+                define('WP_HOME', '{{ $siteUrl }}');
+                define('WP_SITEURL', '{{ $siteUrl }}');
+                define('DISALLOW_FILE_EDIT', true);
+                define('WP_AUTO_UPDATE_CORE', false);
+          startupProbe:
+            httpGet: {path: /wp-login.php, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          # Readiness hits PHP and the database, so a database outage takes the pod out of rotation
+          # without restarting it. Liveness only checks that Apache still accepts connections.
+          readinessProbe:
+            httpGet: {path: /wp-login.php, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          # The official image starts Apache as root and drops to www-data for request handling. It needs a
+          # handful of capabilities for that and for first-run file ownership; everything else is dropped.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, NET_BIND_SERVICE]
+          volumeMounts:
+            - {name: data, mountPath: /var/www/html}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: wordpress-data}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "storefront" "name" "wordpress") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.shopHost }}]
+      secretName: {{ .Values.ingress.tls.shopSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.shopHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: wordpress, port: {number: 80}}

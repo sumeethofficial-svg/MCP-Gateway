@@ -1,0 +1,4 @@
+{{- $ns := .Values.namespaces.platform -}}
+{{- $d := .Values.platform.dashboard -}}
+{{- include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "dashboard" "component" "dashboard" "image" (include "mcp-portal.image" (dict "root" . "name" "dashboard")) "port" 8080 "replicas" $d.replicas "resources" $d.resources "healthPath" "/healthz") }}
+{{ include "mcp-portal.pdb" (dict "ns" $ns "name" "dashboard" "replicas" $d.replicas) }}

@@ -1,0 +1,38 @@
+{{- if .Values.quota.enabled }}
+# A store can never outgrow these, whatever its owner or an agent does inside it.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: store-quota
+  labels:
+    {{- include "mcp-store.labels" (dict "root" . "component" "guardrail" "name" "store-quota") | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ .Values.quota.requestsCpu | quote }}
+    requests.memory: {{ .Values.quota.requestsMemory | quote }}
+    limits.cpu: {{ .Values.quota.limitsCpu | quote }}
+    limits.memory: {{ .Values.quota.limitsMemory | quote }}
+    pods: {{ .Values.quota.pods | quote }}
+    persistentvolumeclaims: {{ .Values.quota.persistentVolumeClaims | quote }}
+    requests.storage: {{ .Values.quota.requestsStorage | quote }}
+    services: {{ .Values.quota.services | quote }}
+{{- end }}
+{{- if .Values.limitRange.enabled }}
+---
+# Gives containers that declare nothing sane defaults (a ResourceQuota on cpu/memory rejects pods without them).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: store-limits
+  labels:
+    {{- include "mcp-store.labels" (dict "root" . "component" "guardrail" "name" "store-limits") | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        {{- toYaml .Values.limitRange.defaultRequest | nindent 8 }}
+      default:
+        {{- toYaml .Values.limitRange.default | nindent 8 }}
+      max:
+        {{- toYaml .Values.limitRange.max | nindent 8 }}
+{{- end }}

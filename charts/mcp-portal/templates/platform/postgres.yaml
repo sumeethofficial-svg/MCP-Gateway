@@ -1,0 +1,94 @@
+{{- $ns := .Values.namespaces.platform -}}
+{{- $pg := .Values.platform.postgres -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres
+  namespace: {{ $ns }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "database" "name" "postgres") | nindent 4 }}
+spec:
+  selector:
+    {{- include "mcp-portal.selector" (dict "name" "postgres") | nindent 4 }}
+  ports:
+    - {name: postgres, port: 5432, targetPort: postgres}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "database" "name" "postgres") | nindent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mcp-portal.selector" (dict "name" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-portal.labels" (dict "root" . "component" "database" "name" "postgres") | nindent 8 }}
+    spec:
+      serviceAccountName: postgres
+      automountServiceAccountToken: false
+      {{- include "mcp-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: {type: RuntimeDefault}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: {{ $pg.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_USER, value: gateway}
+            - {name: POSTGRES_DB, value: gateway}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: password}}
+          startupProbe:
+            exec: {command: [pg_isready, -U, gateway, -d, gateway]}
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            exec: {command: [pg_isready, -U, gateway, -d, gateway]}
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            exec: {command: [pg_isready, -U, gateway, -d, gateway]}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $pg.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $pg.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pg.storage }}

@@ -1,0 +1,27 @@
+﻿{
+  "name": "@mcp-portal/kube-ops-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Kubernetes diagnostics and guarded recovery MCP server: read-only by default, writes limited to an allowlist",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5",
+    "@mcp-portal/mcp-kit": "workspace:*"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./tools": { "types": "./dist/tools.d.ts", "default": "./dist/tools.js" },
+    "./kube": { "types": "./dist/kube.d.ts", "default": "./dist/kube.js" },
+    "./config": { "types": "./dist/config.d.ts", "default": "./dist/config.js" },
+    "./testing": { "types": "./dist/testing.d.ts", "default": "./dist/testing.js" }
+  }
+}

@@ -1,0 +1,24 @@
+mcp-portal is installed.
+
+  Dashboard + MCP endpoint : {{ .Values.ingress.scheme }}://{{ .Values.ingress.host }}   (MCP: /mcp)
+  Storefront               : {{ .Values.ingress.scheme }}://{{ .Values.ingress.shopHost }}
+
+Gateway admin sign-in:
+  email    : {{ .Values.platform.gateway.bootstrapAdmin.email }}
+  password : kubectl -n {{ .Values.namespaces.platform }} get secret gateway-secrets -o jsonpath='{.data.BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; echo
+
+WordPress admin ({{ .Values.ingress.scheme }}://{{ .Values.ingress.shopHost }}/wp-admin):
+  user     : {{ .Values.store.wordpress.adminUser }}
+  password : kubectl -n {{ .Values.namespaces.store }} get secret wordpress-admin -o jsonpath='{.data.password}' | base64 -d; echo
+
+Operations assistant (kube-ops):
+  Sign in as admin and ask the chat: "why is currency-mcp unhealthy, and fix it". Members can read but cannot restart or scale.
+  Check the least-privilege wiring any time:  make verify-isolation   (or `kubectl auth can-i --list --as=system:serviceaccount:{{ .Values.namespaces.platform }}:kube-ops-mcp -n {{ .Values.namespaces.platform }}`)
+
+The WordPress setup Job (WooCommerce install, demo products, API key) runs after the pods start and can take a few minutes:
+  kubectl -n {{ .Values.namespaces.store }} logs job/wordpress-setup -f
+{{- if not .Values.platform.gateway.llm.apiKey }}
+
+The chat assistant is disabled until you provide an LLM key:
+  helm upgrade ... --reuse-values --set platform.gateway.llm.apiKey=<your key>
+{{- end }}

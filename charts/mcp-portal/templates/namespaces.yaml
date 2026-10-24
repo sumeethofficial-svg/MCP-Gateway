@@ -1,0 +1,17 @@
+{{- if .Values.namespaces.create }}
+{{- range $role, $ns := dict "store" .Values.namespaces.store "platform" .Values.namespaces.platform }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: mcp-portal
+    kubernetes.io/metadata.name: {{ $ns }}
+    # Restricted Pod Security Standard where our workloads comply; WordPress needs the baseline profile.
+    pod-security.kubernetes.io/enforce: {{ if eq $role "store" }}baseline{{ else }}restricted{{ end }}
+    pod-security.kubernetes.io/warn: {{ if eq $role "store" }}baseline{{ else }}restricted{{ end }}
+  annotations:
+    helm.sh/resource-policy: keep
+{{- end }}
+{{- end }}

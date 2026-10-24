@@ -1,0 +1,96 @@
+{{- $m := .Values.mysql -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mysql
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    {{- include "mcp-store.labels" (dict "root" . "component" "database" "name" "mysql") | nindent 4 }}
+spec:
+  selector:
+    {{- include "mcp-store.selector" (dict "name" "mysql") | nindent 4 }}
+  ports:
+    - {name: mysql, port: 3306, targetPort: mysql}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  labels:
+    {{- include "mcp-store.labels" (dict "root" . "component" "database" "name" "mysql") | nindent 4 }}
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mcp-store.selector" (dict "name" "mysql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-store.labels" (dict "root" . "component" "database" "name" "mysql") | nindent 8 }}
+    spec:
+      serviceAccountName: mysql
+      automountServiceAccountToken: false
+      {{- include "mcp-store.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mysql
+          image: {{ $m.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: mysql, containerPort: 3306}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: mysql-credentials, key: root-password}}
+            - {name: MYSQL_DATABASE, value: wordpress}
+            - {name: MYSQL_USER, value: wordpress}
+            - name: MYSQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: mysql-credentials, key: password}}
+          startupProbe:
+            exec:
+              command: [sh, -ec, 'mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent']
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: [sh, -ec, 'mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent']
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: [sh, -ec, 'mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent']
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/mysql}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $m.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $m.storage }}

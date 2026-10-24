@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vite/
+charts/**/charts/*.tgz
+charts/**/Chart.lock
+.rendered/
+.demo/
+backups/
+.env.llm.yaml

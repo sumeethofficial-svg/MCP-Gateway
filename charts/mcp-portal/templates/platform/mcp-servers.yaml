@@ -1,0 +1,18 @@
+{{- $ns := .Values.namespaces.platform -}}
+{{- define "mcp-portal.tokenEnv" -}}
+- name: MCP_AUTH_TOKEN
+  valueFrom: {secretKeyRef: {name: upstream-tokens, key: {{ . }}}}
+{{- end -}}
+{{- /* kube-ops-mcp: the only workload with a Kubernetes API token. What that token may do is defined in rbac.yaml. */ -}}
+{{- $ko := .Values.platform.kubeOps -}}
+{{- $koTargets := list -}}
+{{- range $ko.writeTargets }}{{- $koTargets = append $koTargets (printf "%s/%s:%d" (index $.Values.namespaces .scope) .name (int .maxReplicas)) -}}{{- end -}}
+{{- $koEnv := printf "%s\n- {name: ALLOWED_NAMESPACES, value: %s}\n- {name: WRITE_ALLOWLIST, value: %s}\n- {name: MIN_REPLICAS, value: %s}\n- {name: LOG_TAIL_MAX_LINES, value: %s}\n- {name: WRITE_COOLDOWN_SECONDS, value: %s}" (include "mcp-portal.tokenEnv" "KUBE_OPS_MCP_TOKEN") (list .Values.namespaces.platform .Values.namespaces.store | join "," | quote) ($koTargets | join "," | quote) (printf "%v" $ko.minReplicas | quote) (printf "%v" $ko.logTailMaxLines | quote) (printf "%v" $ko.writeCooldownSeconds | quote) -}}
+{{- include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "kube-ops-mcp" "component" "mcp-server" "automountToken" true "image" (include "mcp-portal.image" (dict "root" . "name" $ko.image)) "port" 8080 "replicas" 1 "resources" $ko.resources "envYaml" $koEnv "healthPath" "/healthz") }}
+---
+{{ include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "currency-mcp" "component" "mcp-server" "image" (include "mcp-portal.image" (dict "root" . "name" .Values.platform.currency.image)) "port" 8080 "replicas" 1 "resources" .Values.platform.currency.resources "envYaml" (include "mcp-portal.tokenEnv" "CURRENCY_MCP_TOKEN")) }}
+{{- if .Values.platform.evil.enabled }}
+---
+{{- $evilEnv := printf "%s\n- {name: RUG_PULL_AFTER_SECONDS, value: %s}" (include "mcp-portal.tokenEnv" "EVIL_MCP_TOKEN") (.Values.platform.evil.rugPullAfterSeconds | quote) }}
+{{ include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "evil-mcp" "component" "mcp-server-fixture" "image" (include "mcp-portal.image" (dict "root" . "name" .Values.platform.evil.image)) "port" 8080 "replicas" 1 "resources" .Values.platform.evil.resources "envYaml" $evilEnv) }}
+{{- end }}

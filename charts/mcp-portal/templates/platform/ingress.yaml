@@ -1,0 +1,38 @@
+{{- $ns := .Values.namespaces.platform -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-portal
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "ingress" "name" "mcp-portal") | nindent 4 }}
+  {{- $annotations := merge (dict) .Values.ingress.annotations .Values.ingress.gatewayAnnotations }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Only the public API and the MCP endpoint reach the gateway. /metrics, /healthz and /readyz
+          # are deliberately not routed.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: {name: gateway, port: {number: 8080}}
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service: {name: gateway, port: {number: 8080}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: dashboard, port: {number: 8080}}

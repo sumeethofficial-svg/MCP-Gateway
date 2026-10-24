@@ -1,0 +1,65 @@
+{{- /*
+Least-privilege RBAC for kube-ops-mcp. Everything is namespaced (no ClusterRole), nothing grants access to Secrets,
+ConfigMaps, RBAC objects, exec/attach/portforward or any write other than the two verbs below.
+  read  : list/get pods, pods/log, events, deployments and pod metrics in the platform and store namespaces
+  write : get + patch on the *named* deployments (and their /scale subresource) from platform.kubeOps.writeTargets
+Residual risk worth knowing: `patch deployments` can change more than a restart annotation (e.g. an image) on those
+named deployments. kube-ops-mcp only ever sends two fixed patch shapes, but if the pod were compromised the API server
+would accept others. Add a ValidatingAdmissionPolicy restricting such patches if you need to remove that trust.
+*/ -}}
+{{- $ko := .Values.platform.kubeOps -}}
+{{- $p := .Values.namespaces.platform -}}
+{{- range $ns := list .Values.namespaces.platform .Values.namespaces.store }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-ops-read
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]   # metrics-server (k3s ships it); read-only usage numbers for get_resource_metrics
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-ops-read
+  namespace: {{ $ns }}
+subjects:
+  - {kind: ServiceAccount, name: kube-ops-mcp, namespace: {{ $p }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: kube-ops-read}
+{{- $names := list }}
+{{- range $ko.writeTargets }}{{- if eq (index $.Values.namespaces .scope) $ns }}{{- $names = append $names .name }}{{- end }}{{- end }}
+{{- if $names }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-ops-write
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    resourceNames: {{ $names | toJson }}
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-ops-write
+  namespace: {{ $ns }}
+subjects:
+  - {kind: ServiceAccount, name: kube-ops-mcp, namespace: {{ $p }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: kube-ops-write}
+{{- end }}
+{{- end }}

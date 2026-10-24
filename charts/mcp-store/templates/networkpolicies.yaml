@@ -1,0 +1,133 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ing := .Values.ingress.controllerNamespace -}}
+{{- $dns := .Values.networkPolicy.dnsNamespace -}}
+{{- $gw := .Values.gateway.namespace -}}
+{{- /*
+Every store namespace starts from "deny everything". Each rule below names pods in THIS namespace only (no rule has a
+namespaceSelector except the three explicit ones: ingress controller -> wordpress, gateway -> woo-mcp, DNS), so a pod
+in another store, however it is compromised, has no allowed path to this store's MySQL, WordPress or woo-mcp.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $dns }}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: wordpress}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:   # storefront traffic from the Ingress controller
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $ing }}}
+      ports: [{protocol: TCP, port: 80}]
+    - from:   # REST calls from this store's woo-mcp
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: woo-mcp}
+      ports: [{protocol: TCP, port: 80}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: mysql}
+      ports: [{protocol: TCP, port: 3306}]
+    {{- if .Values.networkPolicy.internetEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mysql
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: mysql}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: wordpress}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: wordpress-setup}
+      ports: [{protocol: TCP, port: 3306}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-setup
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: wordpress-setup}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: mysql}
+      ports: [{protocol: TCP, port: 3306}]
+    {{- if .Values.networkPolicy.internetEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- end }}
+---
+# The store's MCP server is internal-only: reachable from the gateway pods and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: woo-mcp
+  labels:
+    mcp-portal.io/store-id: {{ .Values.store.id | quote }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: woo-mcp}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $gw }}}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: wordpress}
+      ports: [{protocol: TCP, port: 80}]
+{{- end }}

@@ -1,0 +1,19 @@
+{
+  "name": "@mcp-portal/provisioner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Creates and deletes isolated WooCommerce stores: one namespace and one Helm release each, state kept on the Namespace itself",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mcp-portal/mcp-kit": "workspace:*",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  }
+}

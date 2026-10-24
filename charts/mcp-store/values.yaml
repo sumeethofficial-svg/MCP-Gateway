@@ -1,0 +1,85 @@
+# One release of this chart is one store. The provisioner sets store.*, domain.base and the guardrail values per
+# store; everything else is shared defaults it takes from the platform chart (platform.stores.values).
+store:
+  id: demo                       # DNS label; the namespace is <prefix><id> and the host is <id>.<domain.base>
+  name: "Demo Store"
+  ownerId: ""
+  timezone: Asia/Kolkata
+  currency: INR
+  country: "IN:TN"
+
+domain:
+  base: stores.localtest.me      # *.localtest.me resolves to 127.0.0.1, so no DNS work is needed locally
+
+ingress:
+  className: traefik
+  controllerNamespace: kube-system
+  scheme: http
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""               # empty with tls.enabled = cert-manager style "<id>-tls"
+
+# The only namespace that may call this store's MCP server (by namespace label + pod label).
+gateway:
+  namespace: platform
+
+networkPolicy:
+  enabled: true
+  internetEgress: true           # WordPress/WooCommerce plugin downloads over 443; private ranges stay blocked
+  dnsNamespace: kube-system
+
+image:
+  registry: ""
+  tag: dev
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+mysql:
+  image: mysql:8.4
+  storage: 2Gi
+  storageClassName: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 768Mi}
+
+wordpress:
+  image: wordpress:6.8-php8.3-apache
+  cliImage: wordpress:cli-2.11-php8.3
+  woocommerceVersion: "9.9.5"
+  storage: 5Gi
+  storageClassName: ""
+  adminUser: shopadmin
+  adminEmail: admin@example.com
+  resources:
+    requests: {cpu: 200m, memory: 384Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+setupJob:
+  demoProducts: true
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+wooMcp:
+  image: woo-mcp
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 300m, memory: 192Mi}
+
+# Guardrails: a store can never use more than this, however it is configured.
+quota:
+  enabled: true
+  requestsCpu: "1"
+  requestsMemory: 2Gi
+  limitsCpu: "4"
+  limitsMemory: 4Gi
+  pods: "10"
+  persistentVolumeClaims: "3"
+  requestsStorage: 12Gi
+  services: "6"
+limitRange:
+  enabled: true
+  defaultRequest: {cpu: 50m, memory: 64Mi}
+  default: {cpu: 500m, memory: 512Mi}
+  max: {cpu: "2", memory: 2Gi}

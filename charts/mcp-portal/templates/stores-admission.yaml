@@ -1,0 +1,76 @@
+{{- if and .Values.platform.stores.enabled .Values.platform.stores.admissionPolicy.enabled }}
+{{- $p := .Values.namespaces.platform -}}
+{{- $prefix := .Values.platform.stores.namespacePrefix -}}
+{{- $who := printf "system:serviceaccount:%s:provisioner" $p -}}
+{{- /*
+RBAC alone cannot say "this account may create namespaces, but only store-* ones" or "may create RoleBindings, but only
+in those namespaces". These two ValidatingAdmissionPolicies do, and they apply only to the provisioner's identity, so
+nothing else in the cluster is affected. If one of them is wrong the failure mode is closed (requests are denied).
+Requires Kubernetes 1.30+ (admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy).
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mcp-store-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [namespaces]
+  matchConditions:
+    - name: only-the-provisioner
+      expression: {{ printf "request.userInfo.username == '%s'" $who | quote }}
+  variables:
+    - name: subject
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+  validations:
+    - message: {{ printf "the provisioner may only manage namespaces named %s* that it created" $prefix | quote }}
+      expression: {{ printf "variables.subject.metadata.name.startsWith('%s') && has(variables.subject.metadata.labels) && 'mcp-portal.io/store' in variables.subject.metadata.labels && variables.subject.metadata.labels['mcp-portal.io/store'] == 'true'" $prefix | quote }}
+    - message: "a store namespace must enforce the baseline or restricted Pod Security Standard"
+      expression: "request.operation == 'DELETE' || ('pod-security.kubernetes.io/enforce' in object.metadata.labels && object.metadata.labels['pod-security.kubernetes.io/enforce'] in ['baseline', 'restricted'])"
+    - message: "labels of an existing store namespace are immutable; only annotations may change"
+      expression: "request.operation != 'UPDATE' || object.metadata.labels == oldObject.metadata.labels"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mcp-store-namespaces
+spec:
+  policyName: mcp-store-namespaces
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mcp-store-rolebindings
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [rolebindings]
+  matchConditions:
+    - name: only-the-provisioner
+      expression: {{ printf "request.userInfo.username == '%s'" $who | quote }}
+  variables:
+    - name: subject
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+  validations:
+    - message: "role bindings may only be created in store namespaces"
+      expression: {{ printf "has(namespaceObject.metadata.labels) && 'mcp-portal.io/store' in namespaceObject.metadata.labels && namespaceObject.metadata.labels['mcp-portal.io/store'] == 'true' && namespaceObject.metadata.name.startsWith('%s')" $prefix | quote }}
+    - message: "the only role that may be granted is mcp-store-admin, to the provisioner itself"
+      expression: {{ printf "variables.subject.roleRef.kind == 'ClusterRole' && variables.subject.roleRef.name == 'mcp-store-admin' && variables.subject.subjects.all(s, s.kind == 'ServiceAccount' && s.name == 'provisioner' && s.namespace == '%s')" $p | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mcp-store-rolebindings
+spec:
+  policyName: mcp-store-rolebindings
+  validationActions: [Deny]
+{{- end }}

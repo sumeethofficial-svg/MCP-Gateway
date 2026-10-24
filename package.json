@@ -1,0 +1,35 @@
+{
+  "name": "mcp-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WooCommerce hosting on Kubernetes with a team MCP gateway, dashboard and chat agent",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "mcp-servers/*"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @mcp-portal/mcp-kit build && pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "lint:charts": "node scripts/render-charts.mjs",
+    "dev:stack": "tsx scripts/dev-stack.mts"
+  },
+  "devDependencies": {
+    "@mcp-portal/evil-mcp": "workspace:*",
+    "@mcp-portal/kube-ops-mcp": "workspace:*",
+    "@mcp-portal/mcp-kit": "workspace:*",
+    "@mcp-portal/currency-mcp": "workspace:*",
+    "@mcp-portal/woo-mcp": "workspace:*",
+    "@types/node": "^22.10.0",
+    "pino": "^10.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3",
+    "yaml": "^2.9.1"
+  }
+}

@@ -1,0 +1,76 @@
+{{- if .Values.platform.stores.enabled }}
+{{- $p := .Values.namespaces.platform -}}
+{{- /*
+What the provisioner may do, in three deliberately small pieces:
+  mcp-store-namespaces  create/get/list/patch/delete namespaces. Cluster-wide (a namespace does not exist yet when it is
+                        created), so templates/stores-admission.yaml limits it to namespaces named <prefix>* that carry
+                        the label mcp-portal.io/store=true.
+  mcp-store-binder      create RoleBindings and nothing else; it may only bind the single ClusterRole mcp-store-admin
+                        (the `bind` rule), and the admission policy keeps those bindings inside store namespaces.
+  mcp-store-admin       what Helm needs INSIDE one store namespace. Granted per namespace through a RoleBinding the
+                        provisioner creates, so it never applies to the platform, kube-system or any other namespace.
+(The ServiceAccount itself is created with the Deployment in templates/platform/provisioner.yaml.)
+It has no access to nodes, other ClusterRoles, CRDs, or anything outside store namespaces.
+*/ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-store-namespaces
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-store-binder
+rules:
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, create]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: [mcp-store-admin]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-store-admin
+rules:
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services, serviceaccounts, persistentvolumeclaims, resourcequotas, limitranges]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-store-namespaces
+subjects:
+  - {kind: ServiceAccount, name: provisioner, namespace: {{ $p }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: mcp-store-namespaces}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-store-binder
+subjects:
+  - {kind: ServiceAccount, name: provisioner, namespace: {{ $p }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: mcp-store-binder}
+{{- end }}

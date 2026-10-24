@@ -1,0 +1,7 @@
+**/node_modules
+**/dist
+.git
+charts/mcp-portal
+docs
+.rendered
+*.log

@@ -1,0 +1,112 @@
+{{- $hook := ternary "post-install,post-upgrade" "post-install" (default false .Values.store.setupJob.runOnUpgrade) -}}
+{{- $ns := .Values.namespaces.store -}}
+{{- $w := .Values.store.wordpress -}}
+{{- $siteUrl := printf "%s://%s" .Values.ingress.scheme .Values.ingress.shopHost -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wordpress-setup
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  setup.sh: |
+{{ .Files.Get "files/setup.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wordpress-setup
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+automountServiceAccountToken: false
+---
+# Runs after every install and upgrade. It installs WooCommerce, configures the store, creates the
+# low-privilege service user and writes the REST API key that woo-mcp uses. Safe to re-run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wordpress-setup
+  namespace: {{ $ns }}
+  labels:
+    {{- include "mcp-portal.labels" (dict "root" . "component" "setup" "name" "wordpress-setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 1200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-portal.labels" (dict "root" . "component" "setup" "name" "wordpress-setup") | nindent 8 }}
+    spec:
+      serviceAccountName: wordpress-setup
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- include "mcp-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+        seccompProfile: {type: RuntimeDefault}
+      # The WordPress volume is ReadWriteOnce, so the Job must land on the same node as the pod using it.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "mcp-portal.selector" (dict "name" "wordpress") | nindent 18 }}
+      containers:
+        - name: setup
+          image: {{ $w.cliImage }}
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, /scripts/setup.sh]
+          env:
+            - {name: HOME, value: /tmp}
+            # wp-config.php (written by the official image) reads these at runtime, so the Job needs the same ones.
+            - {name: WORDPRESS_DB_HOST, value: mysql}
+            - {name: WORDPRESS_DB_NAME, value: wordpress}
+            - {name: WORDPRESS_DB_USER, value: wordpress}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: mysql-credentials, key: password}}
+            - {name: WP_CLI_CACHE_DIR, value: /tmp/wp-cli-cache}
+            - {name: SITE_URL, value: {{ $siteUrl | quote }}}
+            - {name: STORE_NAME, value: {{ .Values.store.name | quote }}}
+            - {name: STORE_TIMEZONE, value: {{ .Values.store.timezone | quote }}}
+            - {name: STORE_CURRENCY, value: {{ .Values.store.currency | quote }}}
+            - {name: STORE_COUNTRY, value: {{ .Values.store.country | quote }}}
+            - {name: WC_VERSION, value: {{ $w.woocommerceVersion | quote }}}
+            - {name: WP_ADMIN_USER, value: {{ $w.adminUser | quote }}}
+            - {name: WP_ADMIN_EMAIL, value: {{ $w.adminEmail | quote }}}
+            - {name: DEMO_PRODUCTS, value: {{ .Values.store.setupJob.demoProducts | quote }}}
+            - name: WP_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: wordpress-admin, key: password}}
+            - name: WOO_CONSUMER_KEY
+              valueFrom: {secretKeyRef: {name: woo-api, key: consumer-key}}
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: {secretKeyRef: {name: woo-api, key: consumer-secret}}
+          resources:
+            {{- toYaml .Values.store.setupJob.resources | nindent 12 }}
+          securityContext:
+            {{- include "mcp-portal.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/www/html}
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: wordpress-data}
+        - name: scripts
+          configMap: {name: wordpress-setup, defaultMode: 0555}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}

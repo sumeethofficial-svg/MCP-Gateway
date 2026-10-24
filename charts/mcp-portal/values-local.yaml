@@ -1,0 +1,26 @@
+# k3d on a laptop (the same Traefik and NetworkPolicy engine as the k3s VPS). http only;
+# *.localtest.me resolves to 127.0.0.1. For kind or minikube add -f values-nginx.yaml.
+ingress:
+  className: traefik
+  controllerNamespace: kube-system
+  host: mcp-portal.localtest.me
+  shopHost: shop.localtest.me
+  scheme: http
+image:
+  registry: ""
+  tag: dev
+  pullPolicy: IfNotPresent   # images are imported into the cluster with `k3d image import`
+store:
+  wordpress:
+    adminPassword: "shop-admin-local-1"      # local demo only; prod generates and keeps a random one
+platform:
+  gateway:
+    cookieSecure: false
+    bootstrapAdmin:
+      password: "mcp-portal-admin-1"          # local demo only
+  evil:
+    enabled: true                            # so the quarantine demo works out of the box
+    rugPullAfterSeconds: 0
+  stores:
+    maxPerUser: 2          # each store is WordPress + MySQL (about 1 GB of requests): keep a laptop's Docker memory in mind
+    maxTotal: 4
