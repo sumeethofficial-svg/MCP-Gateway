@@ -6,7 +6,7 @@
 {{- $ko := printf "kube-ops-mcp.%s.svc.cluster.local" $ns -}}
 {{- $cu := printf "currency-mcp.%s.svc.cluster.local" $ns -}}
 {{- $allow := list $woo $ko $cu -}}
-{{- if .Values.platform.evil.enabled -}}{{- $allow = append $allow (printf "evil-mcp.%s.svc.cluster.local" $ns) -}}{{- end -}}
+{{- if .Values.platform.evil.enabled -}}{{- $allow = append $allow (printf "malicious-test.%s.svc.cluster.local" $ns) -}}{{- end -}}
 {{- if .Values.platform.stores.enabled -}}{{- $allow = append $allow (printf "woo-mcp.%s*.svc.cluster.local" .Values.platform.stores.namespacePrefix) -}}{{- end -}}
 {{- $allow = concat $allow $g.extraPrivateAllowlist -}}
 {{- /* Upstreams the gateway registers for itself on every start. Admins add more in the dashboard. */ -}}

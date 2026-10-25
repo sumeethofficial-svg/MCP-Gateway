@@ -14,5 +14,5 @@
 {{- if .Values.platform.evil.enabled }}
 ---
 {{- $evilEnv := printf "%s\n- {name: RUG_PULL_AFTER_SECONDS, value: %s}" (include "mcp-portal.tokenEnv" "EVIL_MCP_TOKEN") (.Values.platform.evil.rugPullAfterSeconds | quote) }}
-{{ include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "evil-mcp" "component" "mcp-server-fixture" "image" (include "mcp-portal.image" (dict "root" . "name" .Values.platform.evil.image)) "port" 8080 "replicas" 1 "resources" .Values.platform.evil.resources "envYaml" $evilEnv) }}
+{{ include "mcp-portal.nodeWorkload" (dict "root" . "ns" $ns "name" "malicious-test" "component" "mcp-server-fixture" "image" (include "mcp-portal.image" (dict "root" . "name" .Values.platform.evil.image)) "port" 8080 "replicas" 1 "resources" .Values.platform.evil.resources "envYaml" $evilEnv) }}
 {{- end }}

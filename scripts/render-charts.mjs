@@ -322,8 +322,9 @@ function lintStore(text) {
 // A production render must not ship the malicious fixture or anything predictable.
 {
   const out = render("prod-checks", profiles.prod);
-  if (out) {
-    if (/evil-mcp/.test(out.replace(/# Source:.*/g, "")) && /name: evil-mcp/.test(out)) fail("prod", "the evil-mcp fixture must not be deployed in production values");
+    if (out) {
+        const hit = out.replace(/# Source:.*/g, "").match(/name: malicious-test|mcp-portal-evil-mcp/);
+    if (hit) fail("prod", `the malicious-test fixture must not be deployed in production values (matched: ${hit[0]})`);
     if (/mcp-portal-admin-1|shop-admin-local-1/.test(out)) fail("prod", "a local demo password leaked into the production render");
   }
 }

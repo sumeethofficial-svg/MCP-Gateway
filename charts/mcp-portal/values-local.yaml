@@ -20,7 +20,7 @@ platform:
       password: "mcp-portal-admin-1"          # local demo only
   evil:
     enabled: true                            # so the quarantine demo works out of the box
-    rugPullAfterSeconds: 0
+    rugPullAfterSeconds: 120
   stores:
     maxPerUser: 2          # each store is WordPress + MySQL (about 1 GB of requests): keep a laptop's Docker memory in mind
     maxTotal: 4

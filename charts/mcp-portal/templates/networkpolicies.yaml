@@ -156,7 +156,7 @@ spec:
     - to:
         - podSelector:
             matchExpressions:
-              - {key: app.kubernetes.io/name, operator: In, values: [kube-ops-mcp, currency-mcp, evil-mcp]}
+              - {key: app.kubernetes.io/name, operator: In, values: [kube-ops-mcp, currency-mcp, malicious-test]}
       ports: [{protocol: TCP, port: 8080}]
     - to:
         - namespaceSelector:
@@ -222,7 +222,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - {key: app.kubernetes.io/name, operator: In, values: [kube-ops-mcp, currency-mcp, evil-mcp]}
+      - {key: app.kubernetes.io/name, operator: In, values: [kube-ops-mcp, currency-mcp, malicious-test]}
   policyTypes: [Ingress]
   ingress:
     - from:
