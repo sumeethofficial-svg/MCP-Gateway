@@ -1,5 +1,19 @@
 # System design and tradeoffs
 
+## Architecture diagram
+
+![MCP Portal system architecture](img/architecture.png)
+
+## Reading the diagram
+
+1. **Clients enter through Traefik.** MCP clients such as Claude Code, Cursor and MCP Inspector use a Bearer API key on `/mcp`; the dashboard signs in through a session cookie. Traefik routes both to the gateway.
+2. **The gateway is the control point.** It authenticates callers, applies permissions, routes `<server>__<tool>` calls, enforces timeouts and upstream isolation, records audit events, and powers the chat assistant.
+3. **Postgres stores platform state.** Users, API keys, permissions, server configuration and audit records live in Postgres in the `platform` namespace.
+4. **Platform upstreams are private.** The gateway calls `kube-ops-mcp` for Kubernetes diagnostics and admin-only restart/scale actions, and `currency-mcp` for sample currency conversion. They receive a scoped Bearer token and are restricted by NetworkPolicies.
+5. **The default store is isolated.** In the `store` namespace, `woo-mcp` uses a scoped REST key to call WordPress + WooCommerce, with MySQL 8.4 providing persistent storage.
+6. **The provisioner creates extra stores on demand.** It installs a Helm release into a separate `store-<id>` namespace for each additional store, bundling WordPress, WooCommerce, MySQL and that store's own `woo-mcp`.
+7. **The LLM provider is external.** The chat assistant sends chat completions to a Groq or other OpenAI-compatible API. The deliberately malicious test server is not drawn; an admin adds it manually from the dashboard for the security demo.
+
 ## What problem this solves
 
 A small team wants to run WooCommerce stores from AI clients and chat, without handing every person the store's credentials, without wiring each client to each tool server one by one, and with a record of who did what. The system is therefore four things: one or more **stores**, **MCP servers** that expose them (and other tools), a **gateway** that is the only door, and a **provisioner** that creates more stores on demand.
