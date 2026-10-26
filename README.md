@@ -115,7 +115,3 @@ node scripts/render-charts.mjs    # renders every chart profile and fails on mis
 bash scripts/verify-isolation.sh  # against a live cluster: network isolation, public surface, no leaked credentials
 bash scripts/verify-stores.sh     # store-to-store isolation (create two stores first)
 ```
-
-## Credits
-
-Started from the open-source [storegate](https://github.com/ManiMaran2011/storegate) project. `<one or two sentences on what you built or changed>`
