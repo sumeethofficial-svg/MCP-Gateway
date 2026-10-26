@@ -14,3 +14,4 @@ charts/**/Chart.lock
 .demo/
 backups/
 .env.llm.yaml
+values-secret.yaml

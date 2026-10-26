@@ -1,159 +1,121 @@
-# mcp-portal
+# MCP Portal
 
-A WooCommerce store on Kubernetes, a self-written **WooCommerce MCP server**, and a **team MCP gateway** that puts every tool behind one authenticated, audited endpoint, with a dashboard and a chat assistant that acts as the signed-in user.
+**One door to every MCP server your team uses, running on Kubernetes.**
+Admins connect MCP servers once. Everyone else gets all of them through a single endpoint and a chat assistant, with their own key, their own permissions, and an audit trail of every call.
 
-```mermaid
-flowchart LR
-  subgraph clients[Clients]
-    CC[Claude Code / Cursor / Inspector]
-    UI[Dashboard + Assistant]
-  end
-  subgraph platform[namespace: platform]
-    GW[gateway<br/>MCP server + MCP client<br/>auth · permissions · audit]
-    PG[(Postgres)]
-    KO[kube-ops-mcp<br/>only pod with a K8s token]
-    CU[currency-mcp<br/>sample rate table]
-  end
-  subgraph store[namespace: store]
-    WM[woo-mcp<br/>internal only]
-    WP[WordPress + WooCommerce]
-    DB[(MySQL)]
-  end
-  CC -- "/mcp  Bearer API key" --> GW
-  UI -- "/api  session cookie" --> GW
-  GW --- PG
-  GW -- "Bearer token" --> KO
-  GW -- "Bearer token" --> CU
-  GW -- "Bearer token<br/>NetworkPolicy: gateway only" --> WM
-  WM -- "REST, scoped key" --> WP --- DB
-```
+It ships with a WooCommerce store, a WooCommerce MCP server, two more upstreams, a React dashboard, a chat agent that acts as the signed-in user, and a provisioner that spins up isolated stores on demand. One Helm chart runs it on a laptop (k3d) and on a VPS (k3s).
+
+
+---
+
+## What you get
 
 | | |
 |---|---|
-| **Store** | WordPress + WooCommerce (pinned), MySQL 8.4, provisioned by an idempotent Helm hook Job: demo products, a low-privilege `shop_manager` service user, a generated REST key |
-| **woo-mcp** | List products, create product, list orders, get order, update order status, plus sales summary and get product. Streamable HTTP, stateless, bearer-token protected, `ClusterIP` only |
-| **Gateway** | Aggregates ≥3 upstreams (woo, kube-ops, currency; evil is an optional threat-model fixture) under `<server>__<tool>` names, per-call timeouts, dead-upstream isolation, credentials server-side only |
-| **Dashboard** | Servers (Connected / Unreachable / Disabled, tools, add / edit / disable / remove), invites, API keys, permissions, audit log, chat with visible tool calls |
-| **Chart** | One Helm chart, `values-local.yaml` and `values-prod.yaml`; probes, requests and limits, Secrets, PVCs, Ingress, default-deny NetworkPolicies |
+| **One endpoint** | Add `http://<host>/mcp` and your API key to Claude Code, Cursor or MCP Inspector and see the tools of every enabled server. Nothing else to configure, and no upstream credential ever reaches you |
+| **Chat assistant** | Ask "What orders came in today?" or "Convert that total to USD". The assistant calls tools through the gateway **as you**, shows each call, and every call lands in the audit log under your name |
+| **Four upstreams** | `woo` (store), `kube-ops` (the platform diagnoses itself), `currency` (rates), and a deliberately malicious test server for the security demo |
+| **Safe by default** | Hashed, instantly revocable keys. Per-tool permissions. Quarantine for poisoned tool descriptions and rug pulls. SSRF guard. Default-deny network policies |
+| **Resilient** | A dead or slow upstream never breaks listing or calls to the others, and the dashboard says why it is down |
+| **Multi-store** | Create and delete full WooCommerce stores from the dashboard, each in its own namespace with its own database, quota and tools |
+| **Same chart everywhere** | `values-local.yaml` for k3d, `values-prod.yaml` for a k3s VPS. Upgrades and rollbacks are `helm upgrade` and `helm rollback` |
 
-## Run it locally (about 10 minutes the first time)
+## Architecture
 
-Prerequisites: Docker, [k3d](https://k3d.io), kubectl, Helm 3.14+, Node 22 (only for `make demo`). Port 80 and 443 free.
+![System design](docs/img/architecture.png)
 
-```bash
-make up      # k3d cluster + build 6 images + helm install; waits for the WooCommerce setup Job
-make demo    # creates an admin and a member, mints API keys, writes .demo/credentials.txt
+Only the Ingress is public. Every MCP server is ClusterIP and reachable only from the gateway, enforced by default-deny NetworkPolicies. Details: [`docs/DESIGN.md`](docs/DESIGN.md).
+
+---
+
+## Quick start (local, about 10 minutes)
+
+**Needs:** Docker Desktop, [k3d](https://k3d.io), kubectl, Helm 3.14+, Node 22. Ports 80 and 443 free.
+
+```powershell
+k3d cluster create --config deploy/k3d.yaml
+# build the 7 images and import them (full commands in docs/DEPLOY-VPS.md)
+k3d image import mcp-portal-gateway:dev mcp-portal-dashboard:dev mcp-portal-woo-mcp:dev mcp-portal-kube-ops-mcp:dev mcp-portal-currency-mcp:dev mcp-portal-evil-mcp:dev mcp-portal-provisioner:dev -c mcp-portal
+helm upgrade --install mcp-portal charts/mcp-portal -f charts/mcp-portal/values-local.yaml -f values-secret.yaml --set image.tag=dev --namespace default --wait --wait-for-jobs --timeout 20m
+node scripts/demo-users.mjs      # creates an admin and a member with API keys → .demo/credentials.txt
 ```
 
-`*.localtest.me` resolves to `127.0.0.1` through public DNS, so no `/etc/hosts` edits are needed. If your DNS blocks it, add
-`127.0.0.1 mcp-portal.localtest.me shop.localtest.me` to your hosts file.
+`values-secret.yaml` holds your LLM settings and stays out of git:
+```yaml
+platform:
+  gateway:
+    llm: {apiKey: "<key>", baseUrl: "<OpenAI-compatible endpoint>", model: "<model>"}
+```
 
-| URL | What |
+| Open | |
 |---|---|
-| http://mcp-portal.localtest.me | Dashboard (sign in with the credentials from `make demo`) |
-| http://shop.localtest.me | The storefront. Place an order here |
-| http://shop.localtest.me/wp-admin | WordPress admin (password: see `helm` output or `.demo/credentials.txt`) |
+| http://mcp-portal.localtest.me | Dashboard and MCP endpoint |
+| http://shop.localtest.me | Storefront |
+| http://shop.localtest.me/wp-admin | WordPress admin |
 
-**Why k3d rather than kind?** k3d runs k3s, so Traefik and the NetworkPolicy engine are the same as on the VPS. With kind the default CNI may not enforce NetworkPolicies. kind and minikube still work: add `-f charts/mcp-portal/values-nginx.yaml` and install ingress-nginx (`make deploy HELM_SET="-f charts/mcp-portal/values-nginx.yaml"`).
+Full step-by-step, with every command: [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md).
 
+## Try it
 
-### Enable the chat assistant
-
-The assistant works with any OpenAI-compatible provider. Groq's free tier is the default; OpenAI works too:
-
-```bash
-# Groq (default base URL and model; check your account has access to the model)
-make deploy HELM_SET="--set platform.gateway.llm.apiKey=<your key>"
-
-# OpenAI. Reasoning models only allow tool calls on Chat Completions with reasoning turned off.
-make deploy HELM_SET="--set platform.gateway.llm.baseUrl=https://api.openai.com/v1 --set platform.gateway.llm.model=<model> --set platform.gateway.llm.reasoningEffort=none --set platform.gateway.llm.apiKey=<your key>"
-```
-
-Rate limits (common on free tiers) are retried up to three times, honouring `Retry-After`, before the chat reports an error.
-
-(Re-running `make deploy` later without the flag would clear the key; keep it in a values file you pass with `-f` if you redeploy often.)
-
-Without a key everything else works and the dashboard says so on the Assistant page.
-
-## The demo, step by step (the "definition of done")
-
-1. **Place an order.** Open http://shop.localtest.me, add *Filter coffee powder* to the cart, check out with *Cash on delivery*.
-2. **Admin, through the chat.** Sign in as the admin → *Assistant* → "What orders came in today?" The tool call (`woo/list_orders`) is shown with arguments and result. Then "Mark order #N as completed" and confirm in WooCommerce.
-3. **Member, through an MCP client.** Add the member's key to Claude Code (command in `.demo/credentials.txt`), list tools, ask for today's orders. Try to change an order status: the tool isn't even listed.
-4. **Two roles, visibly different.** As admin, *Servers → woo → Tools*: set *Members → Always allow* on `update_order_status`. The member's next call succeeds, with no restart and no new key.
-5. **Revocation is immediate.** As the member, *API keys → Revoke*. The very next request from that client returns 401, and the attempt appears in the audit log under the member's name.
-6. **The platform debugs itself.** Break a server (`kubectl -n platform scale deploy/currency-mcp --replicas=0`). As admin ask the chat: *"Why is the currency server unreachable, and fix it."* It checks pod health, deployment status and events through `kube-ops`, scales the deployment back up and says what it did. As the member, the same request is refused: the restart/scale tools are not even listed. The change shows in the audit log under the admin's name. See [`docs/DEMO.md`](docs/DEMO.md) for the crash-loop variant (logs are treated as untrusted data).
-7. **Isolation.** While currency is down, the dashboard shows it *Unreachable* with the reason; woo and the others keep answering at normal speed.
-8. **Supply-chain defence.** *Servers → Add server*: `http://evil-mcp.platform.svc.cluster.local:8080/mcp` with the token from `make evil-token`. One tool is quarantined with the exact reasons shown; nobody can call it until an admin approves that exact version.
-9. **Prove the claims.** `make verify` runs about 30 checks against the live cluster (other namespaces cannot reach woo-mcp, WordPress or the databases; kube-ops-mcp's ServiceAccount cannot read Secrets or touch the gateway; credentials are absent from API output; and so on).
-
-A shot-by-shot script for the demo video is in [`docs/DEMO.md`](docs/DEMO.md).
-
-## Connect your own MCP client
-
-Dashboard → *Connect a client* shows copy-paste snippets with your URL. Claude Code:
-
-```bash
-claude mcp add --transport http mcp-portal http://mcp-portal.localtest.me/mcp \
-  --header "Authorization: Bearer <your-api-key>"
-```
-
-`/mcp/lazy` exposes three meta tools (search, describe, call) instead of every tool. Use it when the tool list would crowd the model's context. The built-in assistant switches automatically above 40 tools.
-
-## Create your own stores (bonus)
-
-Dashboard → **Stores** → *Create store*. A few minutes later you have a separate WordPress + WooCommerce + MySQL in its own namespace, at `<id>.stores.localtest.me`, with its own tools (`woo-<id>__list_products`, …) in the chat. Delete it and everything goes, volumes included. Details, limits and recovery behaviour: [`docs/MULTI-STORE.md`](docs/MULTI-STORE.md); `make verify-stores` proves the isolation.
+1. **Place an order.** Storefront → add a product → check out with *Cash on delivery*. It shows up in WordPress admin.
+2. **Ask the assistant.** Dashboard (as admin) → *Chat*: "Create a product called Demo Mug priced 499", then "What orders came in today?".
+3. **Connect a client as the member.** Dashboard → *Connect a client*, or:
+   ```powershell
+   claude mcp add --transport http mcp-portal http://mcp-portal.localtest.me/mcp --header "Authorization: Bearer <member key>"
+   ```
+   List the tools, ask the same orders question, then try one prompt that needs two servers ("get today's orders and convert the total to USD").
+4. **Take control.** Revoke the member's key and watch the next call fail. Disable a server and watch its tools vanish. Delete an upstream's pod and watch the others keep working while the dashboard shows the reason.
+5. **Read the audit log.** Every call above is there, attributed to the right person.
+6. **Break it on purpose.** *Servers → Add server* with the malicious test server and see its poisoned tool quarantined with the reasons.
+7. **Make another store.** *Stores → Create store*, then ask the chat to compare orders across stores.
 
 ## Deploy to a VPS
 
-Same chart, `values-prod.yaml`, k3s: see [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) (including the exact local-vs-prod diff, upgrades and rollback).
+Same chart, `values-prod.yaml`, on k3s (the reference deployment is one AWS EC2 instance). No domain needed: `sslip.io` hostnames work out of the box, and a real domain gets TLS through cert-manager.
+
+```bash
+curl -sfL https://get.k3s.io | sh -
+helm upgrade --install mcp-portal charts/mcp-portal -f charts/mcp-portal/values-prod.yaml -f my-values.yaml --namespace default --wait --wait-for-jobs --timeout 20m
+helm history mcp-portal
+helm rollback mcp-portal <revision> --wait
+```
+
+What changes between local and VPS (hostnames, TLS, replicas, secrets, storage), backups and troubleshooting: [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md).
+
+---
+
+## What is where
+
+| Path | Contents |
+|---|---|
+| `apps/gateway` | MCP gateway, auth, permissions, audit, chat agent |
+| `apps/dashboard` | React dashboard |
+| `apps/provisioner` | Creates and deletes isolated stores |
+| `mcp-servers/` | `woo-mcp`, `kube-ops-mcp`, `currency-mcp`, and the malicious test server (`evil-mcp`) |
+| `charts/mcp-portal`, `charts/mcp-store` | The Helm charts: platform plus default store, and one extra store |
+| `scripts/` | Demo users, isolation checks, chart renderer and linter |
+| `docs/` | Everything below |
 
 ## Documents
 
 | | |
 |---|---|
-| [`docs/DESIGN.md`](docs/DESIGN.md) | System design and the tradeoffs behind it |
-| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | What can go wrong, what stops it, what's left |
-| [`docs/MULTI-STORE.md`](docs/MULTI-STORE.md) | Bonus: users create and delete isolated stores from the dashboard |
-| [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) | k3s on a VPS, TLS, upgrades, rollback, backups |
-| [`docs/DEMO.md`](docs/DEMO.md) | Demo video script |
-| [`docs/STAND-OUTS.md`](docs/STAND-OUTS.md) | The bonus and stand-out items and where to find each |
+| [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) | Setup, local and VPS, upgrade, rollback, backups, troubleshooting |
+| [`docs/STAND-OUTS.md`](docs/STAND-OUTS.md) | Everything implemented: core, bonus and stand-outs, with where to find each |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | System design and tradeoffs |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | Threat model |
+| [`docs/MULTI-STORE.md`](docs/MULTI-STORE.md) | Store provisioning: lifecycle, recovery, isolation |
+| [`docs/DEMO.md`](docs/DEMO.md) | Script for the demo video |
 
-## Develop without Kubernetes
+## Verify the claims
 
-```bash
-pnpm install
-# a Postgres for the integration tests (any 14+ works)
-export TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres
-pnpm test                       # ~190 tests across 7 packages
-pnpm run build                  # TypeScript + dashboard
-
-# the whole stack on loopback: mock WooCommerce, kube-ops (in-memory cluster with a crash-looping currency-mcp), currency, evil + gateway
-createdb mcp-portal_dev
-DATABASE_URL=postgres://postgres@127.0.0.1:5432/mcp-portal_dev npx tsx scripts/dev-stack.mts
-pnpm --filter @mcp-portal/dashboard dev       # http://localhost:5173, sign in admin@example.com / admin-password-123
+```powershell
+npm test                          # unit and integration tests (needs Postgres)
+node scripts/render-charts.mjs    # renders every chart profile and fails on missing probes, limits, hardening
+bash scripts/verify-isolation.sh  # against a live cluster: network isolation, public surface, no leaked credentials
+bash scripts/verify-stores.sh     # store-to-store isolation (create two stores first)
 ```
 
-The integration tests run the real gateway against a real Postgres and real MCP servers over loopback HTTP (no mocks of the thing being tested). The WooCommerce REST API is the one exception: a mock server that also enforces WooCommerce's "Basic auth needs HTTPS" rule.
+## Credits
 
-## Repository layout
-
-```
-apps/gateway        Fastify + MCP SDK: registry, routing, auth, permissions, audit, chat agent
-apps/dashboard      React + Vite + Tailwind
-apps/provisioner    creates/deletes isolated stores (one namespace + Helm release each)
-mcp-servers/        woo-mcp (the assignment's server), kube-ops-mcp, currency-mcp, evil-mcp (fixture)
-packages/mcp-kit    shared stateless Streamable HTTP harness for the MCP servers
-charts/mcp-portal    the Helm chart (store + platform namespaces)
-charts/mcp-store     one WooCommerce store (the provisioner installs one release per store)
-docker/             Dockerfiles (non-root, multi-stage), nginx config
-scripts/            demo users, isolation checks, chart renderer and linter, local dev stack
-```
-
-## What has and hasn't been verified
-
-Verified by running it: all 157 automated tests (real Postgres, real upstreams over loopback); the gateway compiled output booting against Postgres; the dashboard exercised in a real browser (light, dark, mobile); the Helm chart rendered for every profile.
-
-Verified live on a k3d cluster (Docker Desktop, Windows): all six images built; `helm install` with the WooCommerce setup Job; storefront order placed; the store's MCP tools (list products and orders, get an order, sales summary, update an order status, create a product) called through the gateway as admin and as a member; a member's write refused by default and allowed by a rule with no restart; instant key revocation; dead-upstream isolation (a killed server reports Unreachable in 0.04 s while others keep working, and recovers on its own); the poisoned-description server quarantined; NetworkPolicy blocking a stray pod from woo-mcp; the chat assistant calling tools as the signed-in user; both databases killed and the data intact afterwards.
-
-Running it for real found six bugs the automated tests could not (the setup Job lacked the database env vars; secret prefixes stacked on re-install and overflowed a column; WooCommerce ignores API keys on the `?rest_route=` URL form, so woo-mcp now uses `/wp-json/`; the audit page read a field the API does not send; the gateway crash-looped while Postgres pulled its image; the chat had no rate-limit retry). Each is fixed and, where possible, covered by a regression test. Details in `docs/DESIGN.md`.
+Started from the open-source [storegate](https://github.com/ManiMaran2011/storegate) project. `<one or two sentences on what you built or changed>`
