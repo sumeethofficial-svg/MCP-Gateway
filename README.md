@@ -30,38 +30,48 @@ The default store runs in the `store` namespace. Gateway state and platform upst
 
 More detail: [`docs/DESIGN.md`](docs/DESIGN.md).
 
+## Live demo
+
+| | |
+|---|---|
+| **Dashboard** | http://mcp.3.26.73.226.sslip.io |
+| **Store** | http://shop.3.26.73.226.sslip.io |
+| **Store admin** | http://shop.3.26.73.226.sslip.io/wp-admin |
+
+The demo runs on a k3s server over plain HTTP (no TLS), so use `http://`, not `https://`. Login details are below 
+
+| | |
+|---|---|
+| **Dashboard admin** | `admin@example.com` / the password from the command below |
+| **Dashboard member** | email and password from `.demo/credentials.txt` |
+| **WordPress admin** | `shopadmin` / the password from the command below |
+ 
+Get the passwords on the server (bash):
+ 
+```bash
+# dashboard admin
+kubectl -n platform get secret gateway-secrets -o jsonpath='{.data.BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; echo
+# WordPress admin
+kubectl -n store get secret wordpress-admin -o jsonpath='{.data.password}' | base64 -d; echo
+```
+ 
+If you created the demo member on the VPS, the `.demo/credentials.txt` on the machine where you ran `node scripts/demo-users.mjs` holds its password and API key. If you only ran it locally, create the member again against the VPS:
+ 
+```bash
+BASE=http://mcp.3.26.73.226.sslip.io ADMIN_PASSWORD=<admin password> node scripts/demo-users.mjs
+```
+
 ---
 
 ## Quick start (local, about 10 minutes)
 
-**Needs:** Docker Desktop with the Linux container engine running, [k3d](https://k3d.io), kubectl, Helm 3.14+, Node.js 22+, and ports 80/443 available.
+**Needs:** Docker Desktop with the Linux container engine running, [k3d](https://k3d.io), `kubectl`, Helm 3.14+, Node.js 22+, and ports 80/443 available. The commands below are written to work in a Windows PowerShell workflow; GNU Make is optional. If you have Make installed, the equivalent shortcuts are also shown.
 
-Run the commands from the repository root. The image build/import commands below are for the `mcp-portal` k3d cluster.
+Run commands from the repository root. First create `values-secret.yaml` (example below) and add it to `.gitignore`. Then build the Docker images, import them into k3d, and install the Helm chart.
 
-```powershell
-# Create the local cluster
-k3d cluster create --config deploy/k3d.yaml
+### 1. Configure the LLM key
 
-# Build the seven project images
-make images TAG=dev
-
-# Import the images into the cluster
-k3d image import mcp-portal-gateway:dev mcp-portal-dashboard:dev mcp-portal-woo-mcp:dev mcp-portal-kube-ops-mcp:dev mcp-portal-currency-mcp:dev mcp-portal-evil-mcp:dev mcp-portal-provisioner:dev -c mcp-portal
-
-# Install the platform and default WooCommerce store
-helm upgrade --install mcp-portal charts/mcp-portal `
-  -f charts/mcp-portal/values-local.yaml `
-  -f values-secret.yaml `
-  --set image.tag=dev `
-  --namespace default --wait --wait-for-jobs --timeout 20m
-
-# Create demo admin/member accounts and API keys
-node scripts/demo-users.mjs
-```
-
-The demo-user script writes generated credentials to `.demo/credentials.txt`. Keep that file private and do not commit it.
-
-Create `values-secret.yaml` in the repository root for your LLM configuration. Add this file to `.gitignore` before using real credentials:
+Create `values-secret.yaml` in the repository root:
 
 ```yaml
 platform:
@@ -72,13 +82,64 @@ platform:
       model: "<model-supported-by-your-provider>"
 ```
 
-Use an OpenAI-compatible endpoint, model, and API key that belong together. Keep `values-secret.yaml` out of Git and pass it on every Helm upgrade; Helm does not automatically retain values supplied only by a previous command-line override.
+The endpoint, model, and API key must belong to the same provider. Never commit this file or share it publicly.
 
-| Open | |
+### 2. Create the k3d cluster
+
+```bash
+k3d cluster create --config deploy/k3d.yaml
+```
+
+### 3. Build all seven Docker images
+
+Build all seven images from PowerShell or another terminal with Docker available. These are the exact commands defined in the root `Makefile`; run them from the repository root:
+
+```bash
+docker build -f docker/node.Dockerfile --build-arg WORKSPACE=apps/gateway --build-arg ENTRY=dist/main.js -t mcp-portal-gateway:dev .
+docker build -f docker/dashboard.Dockerfile -t mcp-portal-dashboard:dev .
+docker build -f docker/node.Dockerfile --build-arg WORKSPACE=mcp-servers/woo-mcp -t mcp-portal-woo-mcp:dev .
+docker build -f docker/node.Dockerfile --build-arg WORKSPACE=mcp-servers/kube-ops-mcp -t mcp-portal-kube-ops-mcp:dev .
+docker build -f docker/node.Dockerfile --build-arg WORKSPACE=mcp-servers/currency-mcp -t mcp-portal-currency-mcp:dev .
+docker build -f docker/node.Dockerfile --build-arg WORKSPACE=mcp-servers/evil-mcp -t mcp-portal-evil-mcp:dev .
+docker build -f docker/provisioner.Dockerfile -t mcp-portal-provisioner:dev .
+```
+
+### 4. Import the images into k3d
+
+No registry is needed for local development. Import the images into the `mcp-portal` cluster with:
+
+```bash
+k3d image import mcp-portal-gateway:dev mcp-portal-dashboard:dev mcp-portal-woo-mcp:dev mcp-portal-kube-ops-mcp:dev mcp-portal-currency-mcp:dev mcp-portal-evil-mcp:dev mcp-portal-provisioner:dev -c mcp-portal
+```
+
+### 5. Install or upgrade with Helm
+
+```bash
+helm upgrade --install mcp-portal charts/mcp-portal \
+  -f charts/mcp-portal/values-local.yaml \
+  -f values-secret.yaml \
+  --set image.tag=dev \
+  --namespace default --wait --wait-for-jobs --timeout 20m
+```
+
+### 6. Create demo users and verify the deployment
+
+```bash
+node scripts/demo-users.mjs
+kubectl get pods -n platform
+kubectl get pods -n store
+kubectl get ingress -A
+```
+
+The demo-user script writes generated credentials to `.demo/credentials.txt`. Keep that file private and do not commit it.
+
+**Optional Makefile shortcut:** if GNU Make is installed, `make up TAG=dev` creates the cluster if needed, builds and imports images, and installs the chart. Run `make demo` afterward. The shortcut does not include `values-secret.yaml`, so use the explicit Helm command above when configuring the LLM.
+
+| Open | Purpose |
 |---|---|
-| [http://mcp-portal.localtest.me](http://mcp-portal.localtest.me) | Dashboard and MCP endpoint |
-| [http://shop.localtest.me](http://shop.localtest.me) | WooCommerce storefront |
-| [http://shop.localtest.me/wp-admin](http://shop.localtest.me/wp-admin) | WordPress admin |
+| http://mcp-portal.localtest.me | Dashboard and MCP endpoint |
+| http://shop.localtest.me | WooCommerce storefront |
+| http://shop.localtest.me/wp-admin | WordPress admin |
 
 If `localtest.me` does not resolve in your environment, add this line to your hosts file:
 
@@ -86,7 +147,7 @@ If `localtest.me` does not resolve in your environment, add this line to your ho
 127.0.0.1 mcp-portal.localtest.me shop.localtest.me
 ```
 
-Full setup, image publishing, and troubleshooting: [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md).
+Full VPS setup, image publishing, upgrades, and troubleshooting: [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md).
 
 ## Try it
 
@@ -138,12 +199,33 @@ The same Helm chart runs on k3s. The repository's reference deployment uses a Li
 1. Prepare a Linux VPS and install k3s.
 2. Configure DNS to point your MCP Portal and storefront hostnames at the VPS, or use the documented `sslip.io` HTTP-only demo option.
 3. Build and publish versioned container images to a registry the VPS can access.
-4. Configure production hostnames, image tags, TLS, bootstrap administrator settings, store base domain, and the LLM provider in a private override file.
-5. Deploy the production values and your private override:
+4. Create a private override file named `my-values.yaml` in the repository root. Replace the example hostnames, registry, email, and provider settings with your own values:
+
+```yaml
+# my-values.yaml — do not commit this file
+ingress: {host: mcp.example.com, shopHost: shop.example.com, scheme: https, tls: {enabled: true}}
+image: {registry: ghcr.io/YOUR-USER, tag: "1.0.0"}
+platform:
+  gateway:
+    cookieSecure: true
+    bootstrapAdmin: {email: you@example.com}
+    llm:
+      apiKey: "<your-provider-api-key>"
+      baseUrl: "<OpenAI-compatible-endpoint>"
+      model: "<provider-model>"
+  stores: {baseDomain: stores.example.com}
+```
+
+The LLM key, endpoint, and model must match the same provider. Keep `my-values.yaml` out of Git. For an HTTP-only `sslip.io` demo, use the HTTP settings documented in [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) instead of the HTTPS values above.
+
+5. Deploy the production chart and private override:
 
 ```bash
-curl -sfL https://get.k3s.io | sh -
-helm upgrade --install mcp-portal charts/mcp-portal -f charts/mcp-portal/values-prod.yaml -f my-values.yaml --namespace default --wait --wait-for-jobs --timeout 20m
+helm upgrade --install mcp-portal charts/mcp-portal \
+  -f charts/mcp-portal/values-prod.yaml \
+  -f my-values.yaml \
+  --namespace default --wait --wait-for-jobs --timeout 20m
+
 helm history mcp-portal
 helm rollback mcp-portal <revision> --wait
 ```
@@ -184,81 +266,25 @@ Detailed VPS instructions, DNS/TLS setup, image publishing, upgrades, rollbacks,
 
 ## System design and tradeoffs
 
-This section follows the decisions documented in [`docs/DESIGN.md`](docs/DESIGN.md).
+The full architecture rationale, request flow, failure handling, and tradeoff analysis are maintained in [`docs/DESIGN.md`](docs/DESIGN.md). Key points:
 
-### Architecture choices
+- **One policy path:** dashboard actions, external MCP calls, and chat-agent calls share the gateway authorization and audit path.
+- **Aggregated namespaced tools:** upstream tools are combined into one catalogue and named `<server>__<tool>` to avoid collisions.
+- **Failure isolation:** parallel discovery, per-upstream timeouts, health checks, and circuit breakers limit the impact of a failing upstream.
+- **Separate state stores:** PostgreSQL holds platform users, keys, permissions, configuration, and audit data; WooCommerce data remains in MySQL.
+- **Explicit tradeoffs:** in-memory rate limits are per replica; audit records are not tamper-evident; each store has one WordPress replica; heuristic scanning cannot prove a tool is safe; external MCP OAuth/SSO is not implemented.
 
-- **One gateway for every caller.** Dashboard tools, external MCP clients, and chat tool calls go through `GatewayService.callTool(principal, name, args)`. This keeps authorization, rate limits, quarantine, timeout handling, and auditing in one path.
-- **Stateless Streamable HTTP.** Each request is self-contained, so replicas can serve requests without session affinity and restarts do not lose MCP session state. The tradeoff is that server-initiated notifications and long-lived streams are not used.
-- **WooCommerce REST API.** `woo-mcp` uses a scoped REST API key belonging to a low-privilege `shop_manager` user. This preserves WooCommerce business rules and is safer than direct SQL or shell access.
-- **Namespaced tool names.** The gateway prefixes tools with the upstream identifier, such as `woo__list_products`, preventing collisions and ensuring a call routes to the intended server.
-- **PostgreSQL platform state.** User identities, hashed API keys, permissions, upstream configuration, audit records, and conversations are stored separately from the WooCommerce MySQL data.
-- **Separate namespaces and charts.** The platform and default store are installed together as one release across `platform` and `store`; each additional store uses `charts/mcp-store` in a separate `store-<id>` namespace.
-
-### Tool aggregation, routing, and failure handling
-
-The gateway discovers tools from configured upstreams and aggregates them into one caller-specific catalogue. Catalog refresh happens in parallel, with a timeout for each upstream. Before any tool call, the gateway authenticates the caller and evaluates permissions. Only then does it route the namespaced tool to its matching upstream and attach that upstream's server-side credential.
-
-Each upstream has its own health monitor and circuit breaker. A slow server cannot hold up catalog refresh indefinitely, and repeated failures temporarily open the circuit to avoid waiting on every request. During a short outage, last-known tools can remain visible but are marked unreachable; calls to a dead upstream return an error rather than fabricated data. A healthy upstream remains available when a sibling is failing.
-
-The chat agent is another MCP client, not a privileged bypass. It connects in-process as the signed-in user's principal, receives that user's permitted tools, and sends tool calls through the same gateway policy path. Tool calls and rejected attempts are audited under the user's identity.
-
-### Intentional tradeoffs
-
-| Choice | Benefit | Cost or limitation |
-|---|---|---|
-| PostgreSQL for platform state | Durable records, transactions, and searchable audits | Adds a stateful dependency |
-| In-memory rate limits and login throttling | No extra service required | Limits are per replica; Redis or a shared counter would be needed for cluster-wide enforcement |
-| Audit log in the same database | Simple to query and associate with application actions | Not tamper-evident; a stronger deployment could export events to an append-only sink |
-| Single WordPress replica per store | Simple storage and deployment model | No high availability for the storefront; scaling media needs an appropriate shared/object storage design |
-| Helm-based provisioner | Reuses existing charts and makes store creation repeatable | Requires carefully constrained Kubernetes permissions |
-| Heuristic tool-poisoning scanner | Flags common malicious descriptions and explains why | Cannot prove a tool is safe; quarantine-on-change and least-privilege permissions remain important |
-| API keys for external clients | Simple compatibility with MCP clients | SSO and OAuth are not implemented |
-
-### What changes for production
-
-The core architecture remains the same, but production configuration must replace local assumptions:
-
-- **DNS:** replace `localtest.me` hosts with a domain you control, or use `sslip.io` only for a temporary HTTP demo.
-- **Ingress and TLS:** enable HTTPS and certificate management; set secure cookies and restrict administrative WordPress routes.
-- **Storage:** select a persistent storage class suitable for the VPS and establish off-host backups for PostgreSQL, MySQL, WordPress files, and gateway encryption material.
-- **Secrets:** inject LLM/upstream keys securely; use generated database credentials and back up encryption keys separately from database backups.
-- **Images and replicas:** use immutable/versioned image tags from an accessible registry and production replica/resource settings.
-- **Network and operations:** verify default-deny NetworkPolicies are enforced by the CNI, keep internal MCP and database services private, and test restore/rollback procedures.
-
-The details and current chart differences are documented in [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md).
+For production changes, use the chart profiles and deployment guidance in [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md). Replace local hostnames with real DNS, enable TLS and secure cookies, choose suitable persistent storage, keep secrets outside Git, publish versioned images, and verify NetworkPolicy enforcement and backup/restore procedures.
 
 ## Threat model
 
-The detailed threat model is in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The key boundaries are summarized below.
+The detailed threat model and known gaps are maintained in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The core boundaries are:
 
-### Shared upstream credentials: what a member can do with a credential they never see
-
-The gateway stores one credential per upstream, encrypted at rest, and never returns it through the dashboard API. A member can cause the gateway to use that credential only through tools and operations allowed by the member's permissions. For example, a read-only member can list orders but cannot update an order unless policy explicitly allows that tool.
-
-This is not a substitute for least privilege. A permitted write tool can still make real changes to shared store data. Use a low-privilege WooCommerce account, restrict write tools, and review permissions carefully. If an attacker obtains both the credential store and its encryption key, the encrypted credentials can be recovered.
-
-### Why client tokens are not passed through to upstream servers
-
-A user's API key authenticates the user to MCP Portal only. It is never forwarded to WooCommerce or other upstreams, and it is not used as an upstream credential. After authenticating the user, the gateway checks permissions and adds the server-specific upstream credential itself. This prevents one upstream from learning or replaying a caller's gateway key and keeps trust boundaries separate. Attribution remains in the gateway audit log.
-
-### Untrusted upstreams: tool descriptions written to manipulate the model
-
-A malicious upstream can place instructions inside tool descriptions or results, such as asking the model to hide an action or exfiltrate customer data. The `evil-mcp` fixture demonstrates this. A heuristic scanner can quarantine suspicious descriptions, and approved tool definitions are pinned by hash so a later “rug pull” change triggers quarantine again. Untrusted server annotations are not used to grant members additional trust.
-
-These defences reduce exposure but do not prove arbitrary upstream code or tool output is safe. Tool outputs are treated as untrusted data, results are size-capped, and calls are constrained to the signed-in user's permissions. A malicious server's own results can still be false or manipulative.
-
-### What one team member can do to another
-
-Members should only see their own keys and audit rows, and store tools are private to the store owner and administrators. A broad member permission does not override store ownership. Key authentication is uncached, so revocation and permission changes apply on the next request. Chat conversations are per-user.
-
-Members with shared write access may still change shared team resources, such as creating products or updating orders, when those tools are permitted. Audit records help trace actions, but the current audit store is not tamper-evident. Protect administrator accounts and review permission changes.
-
-### Kubernetes boundary and known gaps
-
-Default-deny NetworkPolicies isolate upstreams, databases, and store namespaces where the cluster CNI enforces them. The `kube-ops-mcp` service account is scoped and cannot read Secrets; restart/scale tools are admin-only. The provisioner has broader privileges than ordinary workloads, so its Kubernetes permissions and admission restrictions deserve particular scrutiny.
-
-Known gaps described in `docs/THREAT_MODEL.md` include shared upstream credentials, heuristic scanning, no confirmation step for chat write actions, per-replica rate limits, a non-tamper-evident audit log, publicly routed WordPress admin paths unless restricted, LLM-provider visibility into prompts/results, and namespace-based isolation rather than separate machines.
+- **Shared upstream credentials:** credentials are encrypted at rest and used server-side; members can invoke them only through tools their permissions allow. A permitted write tool can still change shared store data.
+- **Client-token separation:** the user's MCP Portal API key authenticates only to the gateway. It is not forwarded to upstream servers; the gateway attaches each upstream's own credential after authorization.
+- **Malicious tool descriptions and results:** `evil-mcp` demonstrates prompt-injection-style descriptions. The scanner and hash-based change detection can quarantine suspicious changes, but they are heuristics—not proof of safety.
+- **Team boundaries:** keys, audit rows, conversations, and store access are scoped by user/role/ownership. Shared write permissions can still affect shared resources, and audit storage is not tamper-evident.
+- **Kubernetes and operational gaps:** NetworkPolicies must be enforced by the cluster CNI; `kube-ops-mcp` is scoped and cannot read Secrets; the provisioner needs tightly constrained privileges. Other documented gaps include per-replica rate limits, no confirmation step for chat write actions, and LLM-provider visibility into prompts/results.
 
 ## Verify the claims
 
