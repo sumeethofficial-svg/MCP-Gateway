@@ -143,12 +143,7 @@ The same Helm chart runs on k3s. The repository's reference deployment uses a Li
 
 ```bash
 curl -sfL https://get.k3s.io | sh -
-
-helm upgrade --install mcp-portal charts/mcp-portal \
-  -f charts/mcp-portal/values-prod.yaml \
-  -f my-values.yaml \
-  --namespace default --wait --wait-for-jobs --timeout 20m
-
+helm upgrade --install mcp-portal charts/mcp-portal -f charts/mcp-portal/values-prod.yaml -f my-values.yaml --namespace default --wait --wait-for-jobs --timeout 20m
 helm history mcp-portal
 helm rollback mcp-portal <revision> --wait
 ```
