@@ -40,27 +40,12 @@ More detail: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 The demo runs on a k3s server over plain HTTP (no TLS), so use `http://`, not `https://`. Login details are below 
 
-| | |
-|---|---|
-| **Dashboard admin** | `admin@example.com` / the password from the command below |
-| **Dashboard member** | email and password from `.demo/credentials.txt` |
-| **WordPress admin** | `shopadmin` / the password from the command below |
+| Account | Where to sign in | Login |
+|---|---|---|
+| **Dashboard admin** | http://mcp.3.26.73.226.sslip.io | `admin@example.com` / `adminoffice@123` |
+| **Dashboard member** (read-only tools) | http://mcp.3.26.73.226.sslip.io | `sid@example.com` / `memberoffice@123` |
+| **WordPress admin** | http://shop.3.26.73.226.sslip.io/wp-admin | `shopadmin` / `adminoffice@123` |
  
-Get the passwords on the server (bash):
- 
-```bash
-# dashboard admin
-kubectl -n platform get secret gateway-secrets -o jsonpath='{.data.BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; echo
-# WordPress admin
-kubectl -n store get secret wordpress-admin -o jsonpath='{.data.password}' | base64 -d; echo
-```
- 
-If you created the demo member on the VPS, the `.demo/credentials.txt` on the machine where you ran `node scripts/demo-users.mjs` holds its password and API key. If you only ran it locally, create the member again against the VPS:
- 
-```bash
-BASE=http://mcp.3.26.73.226.sslip.io ADMIN_PASSWORD=<admin password> node scripts/demo-users.mjs
-```
-
 ---
 
 ## Quick start (local, about 10 minutes)
